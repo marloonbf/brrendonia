@@ -9,14 +9,11 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Página inicial redireciona para dashboard */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-        {/* Rotas públicas */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
 
-        {/* Rota protegida */}
         <Route
           path="/dashboard"
           element={
@@ -26,7 +23,6 @@ export default function App() {
           }
         />
 
-        {/* Rota fallback */}
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
