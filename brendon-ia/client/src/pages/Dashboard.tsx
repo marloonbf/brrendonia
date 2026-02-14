@@ -59,6 +59,27 @@ export default function Dashboard() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
 
+  // =========================
+  // ✅ UX PROFISSIONAL: trava input por saldo
+  // =========================
+  const maxMinutes = Math.max(1, credits);
+
+  function clampMinutes(value: number) {
+    if (!Number.isFinite(value)) return 1;
+    if (value < 1) return 1;
+    if (value > maxMinutes) return maxMinutes;
+    return value;
+  }
+
+  const canSubmit =
+    !loading &&
+    !!userId &&
+    youtubeUrl.trim().length > 0 &&
+    minutes >= 1 &&
+    minutes <= credits;
+
+  // =========================
+
   async function getAccessToken(): Promise<string | null> {
     const { data } = await supabase.auth.getSession();
     return data.session?.access_token ?? null;
@@ -108,6 +129,10 @@ export default function Dashboard() {
           : json.profile?.credits ?? 0;
 
       setCredits(c);
+
+      // ajusta o input de minutos se ficou maior que o saldo
+      setMinutes((prev) => clampMinutes(prev));
+
       return c;
     } catch (e: any) {
       setMsg(`❌ Erro ao buscar créditos: ${e?.message || e}`);
@@ -126,10 +151,11 @@ export default function Dashboard() {
       const user = userData?.user;
       if (!user) throw new Error("Usuário não encontrado (sem sessão).");
 
-      // pega só os vídeos do usuário logado
       const { data, error } = await supabase
         .from("videos")
-        .select("id,title,source_url,target_duration,minutes,status,created_at,user_id")
+        .select(
+          "id,title,source_url,target_duration,minutes,status,created_at,user_id"
+        )
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(limit);
@@ -138,14 +164,13 @@ export default function Dashboard() {
 
       setVideos((data as VideoItem[]) || []);
     } catch (e: any) {
-      // não travar a UI por causa do histórico
       setMsg((prev) => prev || `❌ Erro ao buscar histórico: ${e?.message || e}`);
     } finally {
       setLoadingVideos(false);
     }
   }
 
-  // ✅ Continua via API
+  // ✅ Continua via API (apenas DEV). Em produção fica bloqueado.
   async function addCredits(amount: number) {
     try {
       setMsg("");
@@ -167,7 +192,6 @@ export default function Dashboard() {
       setCredits(json.credits ?? credits);
       setMsg(`✅ Créditos adicionados! Saldo: ${json.credits ?? credits}`);
 
-      // atualiza histórico direto do Supabase
       await fetchVideos(50);
     } catch (e: any) {
       setMsg(`❌ Erro ao recarregar: ${e?.message || e}`);
@@ -190,6 +214,12 @@ export default function Dashboard() {
         return;
       }
 
+      // ✅ trava extra
+      if (minutesInt > credits) {
+        setMsg(`❌ Você tem ${credits} créditos. Reduza para no máximo ${credits}.`);
+        return;
+      }
+
       const res = await fetchAuthed(`/videos/submit`, {
         method: "POST",
         body: JSON.stringify({
@@ -200,10 +230,10 @@ export default function Dashboard() {
 
       const json: SubmitResponse = await res.json();
 
-      // sem créditos (402)
       if (!res.ok || !json.ok) {
         if (res.status === 402 || json.error === "INSUFFICIENT_CREDITS") {
-          const current = typeof json.credits === "number" ? json.credits : credits;
+          const current =
+            typeof json.credits === "number" ? json.credits : credits;
           setMsg(`❌ Sem créditos suficientes. Saldo atual: ${current}`);
           return;
         }
@@ -219,11 +249,13 @@ export default function Dashboard() {
 
       setCredits(newCredits);
       setMsg(
-        `✅ ${json.message || "Vídeo recebido! Processamento iniciado 🚀"} | Créditos restantes: ${newCredits}`
+        `✅ ${
+          json.message || "Vídeo recebido! Processamento iniciado 🚀"
+        } | Créditos restantes: ${newCredits}`
       );
       setYoutubeUrl("");
 
-      // atualiza histórico direto do Supabase
+      setMinutes((prev) => clampMinutes(prev));
       await fetchVideos(50);
     } catch (e: any) {
       setMsg(`❌ Erro ao enviar vídeo: ${e?.message || e}`);
@@ -288,13 +320,23 @@ export default function Dashboard() {
 
             <div style={{ height: 12 }} />
 
-            <button
-              style={styles.btnPrimaryFull}
-              onClick={() => addCredits(150)}
-              disabled={loading || !userId}
-            >
-              Recarregar 150 créditos
-            </button>
+            {/* 🔒 Botão de recarga só aparece em DEV */}
+            {import.meta.env.DEV ? (
+              <button
+                style={styles.btnPrimaryFull}
+                onClick={() => addCredits(150)}
+                disabled={loading || !userId}
+              >
+                Recarregar 150 créditos (DEV)
+              </button>
+            ) : (
+              <button
+                style={{ ...styles.btnPrimaryFull, opacity: 0.6, cursor: "not-allowed" }}
+                disabled
+              >
+                Comprar créditos (em breve)
+              </button>
+            )}
 
             <div style={{ height: 10 }} />
 
@@ -329,16 +371,25 @@ export default function Dashboard() {
               style={styles.input}
               type="number"
               min={1}
+              max={maxMinutes}
               value={minutes}
-              onChange={(e) => setMinutes(Number(e.target.value))}
+              onChange={(e) => setMinutes(clampMinutes(Number(e.target.value)))}
             />
+
+            <div style={styles.small}>
+              Máximo permitido agora: <b>{credits}</b> minutos
+            </div>
 
             <div style={{ height: 14 }} />
 
             <button
-              style={styles.btnPrimaryFull}
+              style={{
+                ...styles.btnPrimaryFull,
+                opacity: canSubmit ? 1 : 0.55,
+                cursor: canSubmit ? "pointer" : "not-allowed",
+              }}
               onClick={submitVideo}
-              disabled={loading || !userId}
+              disabled={!canSubmit}
             >
               Gerar momentos (iniciar processamento)
             </button>
@@ -346,14 +397,14 @@ export default function Dashboard() {
             <div style={{ height: 10 }} />
 
             <div style={styles.small}>
-              * Por enquanto a API só confirma recebimento. Depois a gente liga a IA pra gerar os “Top
-              10 momentos”.
+              * Por enquanto a API só confirma recebimento. Depois a gente liga a IA
+              pra gerar os “Top 10 momentos”.
             </div>
           </div>
         </div>
 
-        {/* Histórico */}
         <div style={{ height: 14 }} />
+
         <div style={styles.boxWide}>
           <div style={styles.boxTitle}>Histórico (últimos 50)</div>
 
