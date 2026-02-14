@@ -27,21 +27,22 @@ type VideoItem = {
   id: string;
   title?: string | null;
   source_url?: string | null;
-  target_duration?: string | null; // pode vir do banco
-  minutes?: number | null; // se sua API devolver
+  target_duration?: string | null;
+  minutes?: number | null;
   status?: string | null;
   created_at?: string | null;
-};
-
-type VideosListResponse = {
-  ok: boolean;
-  videos?: VideoItem[];
-  error?: string;
+  user_id?: string | null;
 };
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const API_BASE = useMemo(() => "http://localhost:3001", []);
+
+  // ✅ Em produção, configure VITE_API_BASE no Vercel com a URL do Render:
+  // ex: https://brendonia-api.onrender.com
+  const API_BASE = useMemo(
+    () => import.meta.env.VITE_API_BASE || "http://localhost:3001",
+    []
+  );
 
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string>("");
@@ -85,13 +86,13 @@ export default function Dashboard() {
     if (!iso) return "—";
     try {
       const d = new Date(iso);
-      // pt-BR
       return d.toLocaleString("pt-BR");
     } catch {
       return iso;
     }
   }
 
+  // ✅ Créditos continuam vindo da API
   async function fetchBalance() {
     try {
       const res = await fetchAuthed(`/credits/balance`);
@@ -101,7 +102,11 @@ export default function Dashboard() {
         throw new Error(json.error || `Erro balance (${res.status})`);
       }
 
-      const c = typeof json.credits === "number" ? json.credits : json.profile?.credits ?? 0;
+      const c =
+        typeof json.credits === "number"
+          ? json.credits
+          : json.profile?.credits ?? 0;
+
       setCredits(c);
       return c;
     } catch (e: any) {
@@ -110,17 +115,28 @@ export default function Dashboard() {
     }
   }
 
+  // ✅ HISTÓRICO DIRETO DO SUPABASE (SEM API)
   async function fetchVideos(limit = 50) {
     try {
       setLoadingVideos(true);
-      const res = await fetchAuthed(`/videos/list?limit=${limit}`);
-      const json: VideosListResponse = await res.json();
 
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error || `Erro list (${res.status})`);
-      }
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (userErr) throw userErr;
 
-      setVideos(json.videos ?? []);
+      const user = userData?.user;
+      if (!user) throw new Error("Usuário não encontrado (sem sessão).");
+
+      // pega só os vídeos do usuário logado
+      const { data, error } = await supabase
+        .from("videos")
+        .select("id,title,source_url,target_duration,minutes,status,created_at,user_id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+
+      setVideos((data as VideoItem[]) || []);
     } catch (e: any) {
       // não travar a UI por causa do histórico
       setMsg((prev) => prev || `❌ Erro ao buscar histórico: ${e?.message || e}`);
@@ -129,6 +145,7 @@ export default function Dashboard() {
     }
   }
 
+  // ✅ Continua via API
   async function addCredits(amount: number) {
     try {
       setMsg("");
@@ -150,12 +167,14 @@ export default function Dashboard() {
       setCredits(json.credits ?? credits);
       setMsg(`✅ Créditos adicionados! Saldo: ${json.credits ?? credits}`);
 
+      // atualiza histórico direto do Supabase
       await fetchVideos(50);
     } catch (e: any) {
       setMsg(`❌ Erro ao recarregar: ${e?.message || e}`);
     }
   }
 
+  // ✅ Continua via API (pra inserir o vídeo no banco e debitar crédito)
   async function submitVideo() {
     try {
       setMsg("");
@@ -199,9 +218,12 @@ export default function Dashboard() {
           : credits;
 
       setCredits(newCredits);
-      setMsg(`✅ ${json.message || "Vídeo recebido! Processamento iniciado 🚀"} | Créditos restantes: ${newCredits}`);
+      setMsg(
+        `✅ ${json.message || "Vídeo recebido! Processamento iniciado 🚀"} | Créditos restantes: ${newCredits}`
+      );
       setYoutubeUrl("");
 
+      // atualiza histórico direto do Supabase
       await fetchVideos(50);
     } catch (e: any) {
       setMsg(`❌ Erro ao enviar vídeo: ${e?.message || e}`);
