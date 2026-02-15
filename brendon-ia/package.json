@@ -1,12 +1,14 @@
 {
   "name": "brendon-ia",
-  "version": "1.0.0",
   "private": true,
-  "description": "Brendon IA - API + Client",
+  "version": "1.0.0",
+  "license": "ISC",
   "scripts": {
-    "build": "cd client && npm install && npm run build"
+    "build": "npm --prefix client run build",
+    "dev": "npm --prefix client run dev",
+    "test": "echo \"no tests\""
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0"
+    "@supabase/supabase-js": "^2.95.3"
   }
 }
