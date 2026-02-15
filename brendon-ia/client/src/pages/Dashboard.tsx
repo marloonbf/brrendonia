@@ -9,18 +9,23 @@ type BalanceResponse = {
   error?: string;
 };
 
-type AddCreditsResponse = {
-  ok: boolean;
-  credits?: number;
-  error?: string;
-};
-
 type SubmitResponse = {
   ok: boolean;
   message?: string;
   credits_left?: number;
   credits?: number;
   error?: string;
+};
+
+type PaymentCreateResponse = {
+  ok: boolean;
+  error?: string;
+
+  // possíveis nomes que o backend pode devolver
+  payment_url?: string;
+  checkout_url?: string;
+  url?: string;
+  init_point?: string;
 };
 
 type VideoItem = {
@@ -37,8 +42,7 @@ type VideoItem = {
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  // ✅ Em produção, configure VITE_API_BASE no Vercel com a URL do Render:
-  // ex: https://brendonia-api.onrender.com
+  // ✅ Em produção, configure VITE_API_BASE no Vercel (URL do Render)
   const API_BASE = useMemo(
     () => import.meta.env.VITE_API_BASE || "http://localhost:3001",
     []
@@ -59,8 +63,11 @@ export default function Dashboard() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
 
+  // pagamento
+  const [payLoading, setPayLoading] = useState(false);
+
   // =========================
-  // ✅ UX PROFISSIONAL: trava input por saldo
+  // ✅ UX: trava input por saldo
   // =========================
   const maxMinutes = Math.max(1, credits);
 
@@ -94,10 +101,10 @@ export default function Dashboard() {
       Authorization: `Bearer ${token}`,
     };
 
-    // se for JSON, garanta content-type
-    const isJsonBody =
-      init?.body && typeof init.body === "string" && !headers["Content-Type"];
-    if (isJsonBody) headers["Content-Type"] = "application/json";
+    // garante JSON quando body for string
+    if (init?.body && typeof init.body === "string" && !headers["Content-Type"]) {
+      headers["Content-Type"] = "application/json";
+    }
 
     const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
     return res;
@@ -113,7 +120,7 @@ export default function Dashboard() {
     }
   }
 
-  // ✅ Créditos continuam vindo da API
+  // ✅ Créditos via API
   async function fetchBalance() {
     try {
       const res = await fetchAuthed(`/credits/balance`);
@@ -129,10 +136,7 @@ export default function Dashboard() {
           : json.profile?.credits ?? 0;
 
       setCredits(c);
-
-      // ajusta o input de minutos se ficou maior que o saldo
       setMinutes((prev) => clampMinutes(prev));
-
       return c;
     } catch (e: any) {
       setMsg(`❌ Erro ao buscar créditos: ${e?.message || e}`);
@@ -140,7 +144,7 @@ export default function Dashboard() {
     }
   }
 
-  // ✅ HISTÓRICO DIRETO DO SUPABASE (SEM API)
+  // ✅ Histórico direto do Supabase
   async function fetchVideos(limit = 50) {
     try {
       setLoadingVideos(true);
@@ -153,9 +157,7 @@ export default function Dashboard() {
 
       const { data, error } = await supabase
         .from("videos")
-        .select(
-          "id,title,source_url,target_duration,minutes,status,created_at,user_id"
-        )
+        .select("id,title,source_url,target_duration,minutes,status,created_at,user_id")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false })
         .limit(limit);
@@ -170,35 +172,50 @@ export default function Dashboard() {
     }
   }
 
-  // ✅ Continua via API (apenas DEV). Em produção fica bloqueado.
-  async function addCredits(amount: number) {
+  // ✅ Comprar créditos (PayEvo)
+  async function buyCredits150() {
     try {
+      if (payLoading) return;
+      setPayLoading(true);
       setMsg("");
 
-      const res = await fetchAuthed(`/credits/add`, {
+      // IMPORTANTe: Manda os campos que o backend geralmente exige
+      const res = await fetchAuthed(`/payments/create`, {
         method: "POST",
         body: JSON.stringify({
-          amount,
-          description: `Pacote ${amount} créditos`,
+          pack_id: "p150",
+          payer_email: email || undefined,
         }),
       });
 
-      const json: AddCreditsResponse = await res.json();
+      const json: PaymentCreateResponse = await res.json().catch(() => ({} as any));
 
       if (!res.ok || !json.ok) {
-        throw new Error(json.error || "ADD_CREDITS_ERROR");
+        throw new Error(json?.error || `PAY_CREATE_ERROR (${res.status})`);
       }
 
-      setCredits(json.credits ?? credits);
-      setMsg(`✅ Créditos adicionados! Saldo: ${json.credits ?? credits}`);
+      const link =
+        json.payment_url ||
+        json.checkout_url ||
+        json.url ||
+        json.init_point;
 
-      await fetchVideos(50);
+      if (!link) {
+        throw new Error("PAY_CREATE_NO_URL");
+      }
+
+      // abre checkout
+      window.open(link, "_blank", "noopener,noreferrer");
+
+      setMsg("✅ Checkout aberto. Após pagar, volte e clique em “Atualizar saldo”.");
     } catch (e: any) {
-      setMsg(`❌ Erro ao recarregar: ${e?.message || e}`);
+      setMsg(`❌ Erro ao criar pagamento: ${e?.message || e}`);
+    } finally {
+      setPayLoading(false);
     }
   }
 
-  // ✅ Continua via API (pra inserir o vídeo no banco e debitar crédito)
+  // ✅ Envia vídeo (API debita crédito)
   async function submitVideo() {
     try {
       setMsg("");
@@ -214,7 +231,6 @@ export default function Dashboard() {
         return;
       }
 
-      // ✅ trava extra
       if (minutesInt > credits) {
         setMsg(`❌ Você tem ${credits} créditos. Reduza para no máximo ${credits}.`);
         return;
@@ -232,8 +248,7 @@ export default function Dashboard() {
 
       if (!res.ok || !json.ok) {
         if (res.status === 402 || json.error === "INSUFFICIENT_CREDITS") {
-          const current =
-            typeof json.credits === "number" ? json.credits : credits;
+          const current = typeof json.credits === "number" ? json.credits : credits;
           setMsg(`❌ Sem créditos suficientes. Saldo atual: ${current}`);
           return;
         }
@@ -249,12 +264,9 @@ export default function Dashboard() {
 
       setCredits(newCredits);
       setMsg(
-        `✅ ${
-          json.message || "Vídeo recebido! Processamento iniciado 🚀"
-        } | Créditos restantes: ${newCredits}`
+        `✅ ${json.message || "Vídeo recebido! Processamento iniciado 🚀"} | Créditos restantes: ${newCredits}`
       );
       setYoutubeUrl("");
-
       setMinutes((prev) => clampMinutes(prev));
       await fetchVideos(50);
     } catch (e: any) {
@@ -320,23 +332,17 @@ export default function Dashboard() {
 
             <div style={{ height: 12 }} />
 
-            {/* 🔒 Botão de recarga só aparece em DEV */}
-            {import.meta.env.DEV ? (
-              <button
-                style={styles.btnPrimaryFull}
-                onClick={() => addCredits(150)}
-                disabled={loading || !userId}
-              >
-                Recarregar 150 créditos (DEV)
-              </button>
-            ) : (
-              <button
-                style={{ ...styles.btnPrimaryFull, opacity: 0.6, cursor: "not-allowed" }}
-                disabled
-              >
-                Comprar créditos (em breve)
-              </button>
-            )}
+            <button
+              style={{
+                ...styles.btnPrimaryFull,
+                opacity: loading || !userId || payLoading ? 0.7 : 1,
+                cursor: loading || !userId || payLoading ? "not-allowed" : "pointer",
+              }}
+              onClick={buyCredits150}
+              disabled={loading || !userId || payLoading}
+            >
+              {payLoading ? "Abrindo checkout..." : "Comprar 150 créditos"}
+            </button>
 
             <div style={{ height: 10 }} />
 
@@ -351,6 +357,10 @@ export default function Dashboard() {
             >
               Atualizar saldo
             </button>
+
+            <div style={styles.small}>
+              * Após pagar, volte aqui e clique em <b>Atualizar saldo</b>. (Depois vamos automatizar via webhook)
+            </div>
           </div>
 
           <div style={styles.box}>
@@ -397,8 +407,7 @@ export default function Dashboard() {
             <div style={{ height: 10 }} />
 
             <div style={styles.small}>
-              * Por enquanto a API só confirma recebimento. Depois a gente liga a IA
-              pra gerar os “Top 10 momentos”.
+              * Por enquanto a API só confirma recebimento. Depois a gente liga a IA pra gerar os “Top 10 momentos”.
             </div>
           </div>
         </div>
@@ -430,7 +439,12 @@ export default function Dashboard() {
                       <td style={styles.td}>{v.title || "YouTube video"}</td>
                       <td style={styles.td}>
                         {v.source_url ? (
-                          <a style={styles.link} href={v.source_url} target="_blank" rel="noreferrer">
+                          <a
+                            style={styles.link}
+                            href={v.source_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
                             abrir
                           </a>
                         ) : (
@@ -489,26 +503,11 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     marginBottom: 18,
   },
-  title: {
-    margin: 0,
-    fontSize: 40,
-    letterSpacing: -0.6,
-  },
-  sub: {
-    marginTop: 8,
-    color: "rgba(255,255,255,.72)",
-    fontSize: 14,
-  },
-  actionsTop: {
-    display: "flex",
-    gap: 10,
-    alignItems: "center",
-  },
-  row: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 14,
-  },
+  title: { margin: 0, fontSize: 40, letterSpacing: -0.6 },
+  sub: { marginTop: 8, color: "rgba(255,255,255,.72)", fontSize: 14 },
+  actionsTop: { display: "flex", gap: 10, alignItems: "center" },
+
+  row: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
   box: {
     padding: 16,
     borderRadius: 14,
@@ -521,28 +520,10 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(255,255,255,.10)",
     background: "rgba(0,0,0,.18)",
   },
-  boxTitle: {
-    fontSize: 16,
-    fontWeight: 700,
-    marginBottom: 10,
-  },
-  credits: {
-    fontSize: 46,
-    fontWeight: 800,
-    lineHeight: 1,
-  },
-  small: {
-    marginTop: 8,
-    color: "rgba(255,255,255,.60)",
-    fontSize: 12,
-    lineHeight: 1.35,
-  },
-  label: {
-    display: "block",
-    marginBottom: 6,
-    color: "rgba(255,255,255,.72)",
-    fontSize: 12,
-  },
+  boxTitle: { fontSize: 16, fontWeight: 700, marginBottom: 10 },
+  credits: { fontSize: 46, fontWeight: 800, lineHeight: 1 },
+  small: { marginTop: 8, color: "rgba(255,255,255,.60)", fontSize: 12, lineHeight: 1.35 },
+  label: { display: "block", marginBottom: 6, color: "rgba(255,255,255,.72)", fontSize: 12 },
   input: {
     width: "100%",
     borderRadius: 10,
@@ -599,16 +580,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,.90)",
     fontSize: 13,
   },
-  tableWrap: {
-    overflowX: "auto",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,.10)",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: 13,
-  },
+  tableWrap: { overflowX: "auto", borderRadius: 12, border: "1px solid rgba(255,255,255,.10)" },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
   th: {
     textAlign: "left",
     padding: "10px 12px",
@@ -622,9 +595,5 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,.88)",
     whiteSpace: "nowrap",
   },
-  link: {
-    color: "rgba(120,160,255,.95)",
-    textDecoration: "none",
-    fontWeight: 700,
-  },
+  link: { color: "rgba(120,160,255,.95)", textDecoration: "none", fontWeight: 700 },
 };
