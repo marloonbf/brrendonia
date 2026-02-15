@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 const { createClient } = require("@supabase/supabase-js");
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_URL = process.env.URL_SUPABASE || process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -88,7 +88,7 @@ module.exports = async (req, res) => {
 
     const { data: profile, error: pErr } = await supabaseAdmin
       .from("profiles")
-      .select("id,email,plan,credits")
+      .select("id,email,plan,videos_analyzed")
       .eq("email", email)
       .maybeSingle();
 
@@ -103,7 +103,7 @@ module.exports = async (req, res) => {
     const activatePro = shouldActivatePro(payment);
 
     const updatePayload = {};
-    if (addCredits > 0) updatePayload.credits = Number(profile.credits || 0) + addCredits;
+    if (addCredits > 0) updatePayload.videos_analyzed = Number(profile.videos_analyzed || 0) + addCredits;
     if (activatePro) {
       updatePayload.plan = "pro";
       updatePayload.subscription_status = "active";
