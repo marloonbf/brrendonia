@@ -413,6 +413,7 @@ export default function Dashboard() {
 
     async function tick() {
       await fetchVideos(50); // atualiza status e duration/thumbnail se backend preenche
+      if (!selectedVideo) return; 
       await fetchMoments(selectedVideo.id);
     }
 
