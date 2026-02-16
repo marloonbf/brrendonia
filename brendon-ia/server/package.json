@@ -19,3 +19,11 @@
     "nodemon": "^3.1.4"
   }
 }
+{
+  "scripts": {
+    "postinstall": "npm --prefix client install",
+    "build": "npm --prefix client run build",
+    "dev": "npm --prefix client run dev"
+  }
+}
+
