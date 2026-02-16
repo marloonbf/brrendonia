@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "license": "ISC",
   "scripts": {
+    "postinstall": "npm --prefix client install",
     "build": "npm --prefix client run build",
-    "dev": "npm --prefix client run dev",
-    "test": "echo \"no tests\""
+    "dev": "npm --prefix client run dev"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.95.3"

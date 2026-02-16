@@ -36,7 +36,6 @@ type VideoItem = {
   created_at?: string | null;
   user_id?: string | null;
 
-  // opcionais (crie no SQL acima)
   thumbnail_url?: string | null;
   channel?: string | null;
   duration_seconds?: number | null;
@@ -120,10 +119,15 @@ function fmtDate(iso?: string | null) {
 export default function Dashboard() {
   const navigate = useNavigate();
 
-  const API_BASE = useMemo(
-    () => import.meta.env.VITE_API_BASE || "http://localhost:3001",
-    []
-  );
+  /**
+   * DICA IMPORTANTE:
+   * - Em produção (Vercel), o melhor é chamar sua API serverless via mesma origem.
+   * - Então, deixe VITE_API_BASE vazio (ou nem crie), e use API_PREFIX "/api".
+   *
+   * Se você usa backend externo, coloque VITE_API_BASE="https://seu-backend.com"
+   */
+  const API_BASE = useMemo(() => import.meta.env.VITE_API_BASE || "", []);
+  const API_PREFIX = useMemo(() => import.meta.env.VITE_API_PREFIX || "/api", []);
 
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string>("");
@@ -137,13 +141,13 @@ export default function Dashboard() {
 
   // UI “opus-like”
   const [model, setModel] = useState<string>("ClipAny");
-  const [clipDurationSec, setClipDurationSec] = useState<number>(60); // ex: 60 = 1min
+  const [clipDurationSec, setClipDurationSec] = useState<number>(60);
   const [hookEnabled, setHookEnabled] = useState<boolean>(true);
   const [categories, setCategories] = useState<string[]>(["auto"]);
   const [specificPrompt, setSpecificPrompt] = useState<string>("");
 
   // range + proteção
-  const [videoDurationSec, setVideoDurationSec] = useState<number>(0); // se o banco trouxer
+  const [videoDurationSec, setVideoDurationSec] = useState<number>(0);
   const [clipStartSec, setClipStartSec] = useState<number>(0);
   const [clipEndSec, setClipEndSec] = useState<number>(0);
   const [protectSec, setProtectSec] = useState<number>(0);
@@ -202,7 +206,9 @@ export default function Dashboard() {
       headers["Content-Type"] = "application/json";
     }
 
-    const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    // chama: {API_BASE}{API_PREFIX}{path}
+    const url = `${API_BASE}${API_PREFIX}${path}`;
+    const res = await fetch(url, { ...init, headers });
     return res;
   }
 
@@ -314,7 +320,6 @@ export default function Dashboard() {
 
   // =========================
   // Histórico (Supabase)
-  // IMPORTANT: select("*") evita erro de “coluna não existe”
   // =========================
   async function fetchVideos(limit = 50) {
     try {
@@ -338,13 +343,15 @@ export default function Dashboard() {
       const list = (data as VideoItem[]) || [];
       setVideos(list);
 
-      // se você tem duration_seconds no banco, atualiza UI de range
       if (selectedVideo) {
         const refreshed = list.find((v) => v.id === selectedVideo.id);
         if (refreshed) setSelectedVideo(refreshed);
       }
+
+      return list;
     } catch (e: any) {
       setMsg((prev) => prev || `❌ Erro ao buscar histórico: ${e?.message || e}`);
+      return [];
     } finally {
       setLoadingVideos(false);
     }
@@ -397,7 +404,6 @@ export default function Dashboard() {
     setSpecificPrompt(v.specific_prompt || "");
   }
 
-  // ao clicar no histórico: seleciona e carrega top10
   async function selectVideo(v: VideoItem) {
     setSelectedVideo(v);
     setMsg("");
@@ -405,20 +411,30 @@ export default function Dashboard() {
     await fetchMoments(v.id);
   }
 
-  // polling enquanto pending
+  /**
+   * ✅ FIX DEFINITIVO (sem gambiarra):
+   * - Nada de selectedVideo?.id virando string|undefined
+   * - Guarda o videoId como string (após checar selectedVideo)
+   * - O tick usa apenas o videoId estável
+   * - Se mudar o selectedVideo/status, o interval anterior é limpo
+   */
   useEffect(() => {
-    if (!selectedVideo?.id) return;
+    if (!selectedVideo) return;
+
+    const videoId: string = selectedVideo.id; // string garantida
+    const status = (selectedVideo.status || "").toLowerCase();
 
     let timer: number | null = null;
 
-    async function tick() {
-      await fetchVideos(50); // atualiza status e duration/thumbnail se backend preenche
-      if (!selectedVideo) return; 
-      await fetchMoments(selectedVideo.id);
-    }
+    const tick = async () => {
+      await fetchVideos(50);
+      await fetchMoments(videoId);
+    };
 
-    if ((selectedVideo.status || "").toLowerCase() === "pending") {
-      timer = window.setInterval(tick, 4000);
+    if (status === "pending") {
+      timer = window.setInterval(() => {
+        void tick();
+      }, 4000);
     }
 
     return () => {
@@ -490,7 +506,6 @@ export default function Dashboard() {
         return;
       }
 
-      // (UI) se tiver duração do vídeo, garante range coerente
       let start = Math.max(0, Math.floor(clipStartSec));
       let end = Math.max(0, Math.floor(clipEndSec));
       if (videoDurationSec > 0) {
@@ -505,7 +520,6 @@ export default function Dashboard() {
           url: youtubeUrl.trim(),
           minutes: minutesInt,
 
-          // parâmetros extras “opus-like” (backend pode ignorar por enquanto)
           model,
           clip_duration_sec: clipDurationSec,
           hook_enabled: hookEnabled,
@@ -536,16 +550,16 @@ export default function Dashboard() {
           : credits;
 
       setCredits(newCredits);
-      setMsg(`✅ ${json.message || "Vídeo recebido! Processamento iniciado 🚀"} | Créditos restantes: ${newCredits}`);
+      setMsg(
+        `✅ ${json.message || "Vídeo recebido! Processamento iniciado 🚀"} | Créditos restantes: ${newCredits}`
+      );
 
       setMinutes((prev) => clampMinutes(prev));
 
-      // atualiza histórico e já tenta selecionar o último
-      await fetchVideos(50);
+      const list = await fetchVideos(50);
 
-      // tenta selecionar o vídeo criado (se API retornar video_id)
       if (json.video_id) {
-        const found = videos.find((v) => v.id === json.video_id);
+        const found = list.find((v) => v.id === json.video_id);
         if (found) await selectVideo(found);
       }
     } catch (e: any) {
@@ -583,7 +597,6 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===== UI helper (categorias)
   function toggleCategory(key: string) {
     setCategories((prev) => {
       const has = prev.includes(key);
@@ -615,12 +628,13 @@ export default function Dashboard() {
     (selectedVideo?.source_url ? getThumbFromUrl(selectedVideo.source_url) : null);
 
   const selectedDuration =
-    typeof selectedVideo?.duration_seconds === "number" ? selectedVideo.duration_seconds : videoDurationSec;
+    typeof selectedVideo?.duration_seconds === "number"
+      ? selectedVideo.duration_seconds
+      : videoDurationSec;
 
   return (
     <div style={styles.page}>
       <div style={styles.shell}>
-        {/* Top bar */}
         <div style={styles.topbar}>
           <div>
             <div style={styles.brandRow}>
@@ -656,7 +670,8 @@ export default function Dashboard() {
                 setMsg("");
                 await fetchBalance();
                 await fetchVideos(50);
-                if (selectedVideo?.id) await fetchMoments(selectedVideo.id);
+                const id = selectedVideo?.id;
+                if (id) await fetchMoments(id);
               }}
               disabled={loading}
             >
@@ -670,12 +685,12 @@ export default function Dashboard() {
         </div>
 
         <div style={styles.grid}>
-          {/* LEFT */}
           <div>
             <div style={styles.card}>
               <div style={styles.cardTitle}>Obter momentos em 1 clique</div>
               <div style={styles.help}>
-                Cole um link do YouTube. Você recebe <b>Top 10 momentos</b> com <b>timestamps + texto</b> — sem precisar assistir tudo.
+                Cole um link do YouTube. Você recebe <b>Top 10 momentos</b> com{" "}
+                <b>timestamps + texto</b> — sem precisar assistir tudo.
               </div>
 
               <div style={{ height: 10 }} />
@@ -690,7 +705,6 @@ export default function Dashboard() {
 
               <div style={{ height: 12 }} />
 
-              {/* Preview */}
               <div style={styles.previewWrap}>
                 {ytLoading ? (
                   <div style={styles.previewSkeleton}>
@@ -720,10 +734,13 @@ export default function Dashboard() {
                         {ytPreview.title}
                       </div>
                       <div style={styles.previewMeta}>
-                        {ytPreview.author_name ? `Canal: ${ytPreview.author_name}` : "Canal do YouTube"}
+                        {ytPreview.author_name
+                          ? `Canal: ${ytPreview.author_name}`
+                          : "Canal do YouTube"}
                       </div>
                       <div style={styles.previewMeta2}>
-                        Dica: selecione abaixo a <b>parte do vídeo</b> (range) que você quer analisar.
+                        Dica: selecione abaixo a <b>parte do vídeo</b> (range) que você quer
+                        analisar.
                       </div>
 
                       <div style={{ height: 10 }} />
@@ -731,7 +748,9 @@ export default function Dashboard() {
                       <div style={styles.previewActions}>
                         <button
                           style={styles.btnGhostSm}
-                          onClick={() => window.open(ytPreview.url, "_blank", "noopener,noreferrer")}
+                          onClick={() =>
+                            window.open(ytPreview.url, "_blank", "noopener,noreferrer")
+                          }
                         >
                           Abrir no YouTube
                         </button>
@@ -762,7 +781,6 @@ export default function Dashboard() {
 
               <div style={{ height: 14 }} />
 
-              {/* “Painel Opus”: modelo, duração do clipe, categorias, prompt, range e proteção */}
               <div style={styles.opusPanel}>
                 <div style={styles.opusTabs}>
                   <div style={styles.opusTabActive}>Corte por IA</div>
@@ -798,20 +816,31 @@ export default function Dashboard() {
                     </select>
                   </div>
 
-                  <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
+                  <div
+                    style={{
+                      marginLeft: "auto",
+                      display: "flex",
+                      gap: 10,
+                      alignItems: "center",
+                    }}
+                  >
                     <div style={styles.opusLabel}>Gancho automático</div>
                     <button
                       onClick={() => setHookEnabled((p) => !p)}
                       style={{
                         ...styles.toggle,
-                        background: hookEnabled ? "rgba(99,102,241,.95)" : "rgba(255,255,255,.08)",
+                        background: hookEnabled
+                          ? "rgba(99,102,241,.95)"
+                          : "rgba(255,255,255,.08)",
                       }}
                       aria-label="Gancho automático"
                     >
                       <span
                         style={{
                           ...styles.toggleDot,
-                          transform: hookEnabled ? "translateX(18px)" : "translateX(0px)",
+                          transform: hookEnabled
+                            ? "translateX(18px)"
+                            : "translateX(0px)",
                         }}
                       />
                     </button>
@@ -821,7 +850,11 @@ export default function Dashboard() {
                 <div style={styles.opusLabel}>Para melhores resultados, escolha gêneros</div>
                 <div style={styles.chips}>
                   {categoryButtons.map((b) => {
-                    const active = categories.includes(b.key) || (b.key === "auto" && categories.length === 1 && categories[0] === "auto");
+                    const active =
+                      categories.includes(b.key) ||
+                      (b.key === "auto" &&
+                        categories.length === 1 &&
+                        categories[0] === "auto");
                     return (
                       <button
                         key={b.key}
@@ -831,8 +864,12 @@ export default function Dashboard() {
                         }}
                         style={{
                           ...styles.chip,
-                          borderColor: active ? "rgba(99,102,241,.65)" : "rgba(255,255,255,.10)",
-                          background: active ? "rgba(99,102,241,.18)" : "rgba(255,255,255,.04)",
+                          borderColor: active
+                            ? "rgba(99,102,241,.65)"
+                            : "rgba(255,255,255,.10)",
+                          background: active
+                            ? "rgba(99,102,241,.18)"
+                            : "rgba(255,255,255,.04)",
                         }}
                       >
                         {b.label}
@@ -884,12 +921,17 @@ export default function Dashboard() {
 
                   <div style={styles.rangeBox}>
                     <div style={styles.rangeSmall}>Fim</div>
-                    <div style={styles.rangeTime}>{fmtTime(clipEndSec || (selectedDuration || 0))}</div>
+                    <div style={styles.rangeTime}>
+                      {fmtTime(clipEndSec || (selectedDuration || 0))}
+                    </div>
                     <input
                       type="range"
                       min={0}
                       max={Math.max(0, selectedDuration || 0)}
-                      value={Math.min(clipEndSec || (selectedDuration || 0), selectedDuration || (clipEndSec || 0))}
+                      value={Math.min(
+                        clipEndSec || (selectedDuration || 0),
+                        selectedDuration || (clipEndSec || 0)
+                      )}
                       onChange={(e) => setClipEndSec(Number(e.target.value))}
                       style={styles.range}
                       disabled={!selectedDuration}
@@ -935,7 +977,6 @@ export default function Dashboard() {
               {msg ? <div style={styles.msg}>{msg}</div> : null}
             </div>
 
-            {/* Top 10 */}
             <div style={{ height: 12 }} />
 
             <div style={styles.card}>
@@ -947,15 +988,15 @@ export default function Dashboard() {
               <div style={{ height: 10 }} />
 
               {!selectedVideo ? (
-                <div style={styles.empty}>
-                  Selecione um vídeo no histórico.
-                </div>
+                <div style={styles.empty}>Selecione um vídeo no histórico.</div>
               ) : loadingMoments ? (
                 <div style={styles.small}>Carregando momentos…</div>
               ) : moments.length === 0 ? (
                 <div style={styles.empty}>
-                  Ainda sem resultados. Status atual: <b>{selectedVideo.status || "—"}</b>.<br />
-                  Se ficar “pending” para sempre, o seu worker/IA não está gravando na tabela <b>moments</b>.
+                  Ainda sem resultados. Status atual: <b>{selectedVideo.status || "—"}</b>.
+                  <br />
+                  Se ficar “pending” para sempre, o seu worker/IA não está gravando na tabela{" "}
+                  <b>moments</b>.
                 </div>
               ) : (
                 <div style={styles.momentsList}>
@@ -967,21 +1008,16 @@ export default function Dashboard() {
                           {fmtTime(m.start_sec)} – {fmtTime(m.end_sec)}
                         </div>
                         <div style={styles.momentScore}>
-                          Score {typeof m.score === "number" ? Number(m.score).toFixed(1) : "—"}
+                          Score{" "}
+                          {typeof m.score === "number" ? Number(m.score).toFixed(1) : "—"}
                         </div>
                       </div>
 
-                      <div style={styles.momentTitle}>
-                        {m.title || "Momento sugerido"}
-                      </div>
+                      <div style={styles.momentTitle}>{m.title || "Momento sugerido"}</div>
 
-                      {m.reason ? (
-                        <div style={styles.momentReason}>{m.reason}</div>
-                      ) : null}
+                      {m.reason ? <div style={styles.momentReason}>{m.reason}</div> : null}
 
-                      {m.text ? (
-                        <div style={styles.momentText}>{m.text}</div>
-                      ) : null}
+                      {m.text ? <div style={styles.momentText}>{m.text}</div> : null}
 
                       <div style={styles.momentBtns}>
                         <button
@@ -1001,7 +1037,10 @@ export default function Dashboard() {
                             onClick={() => {
                               const id = parseYouTubeId(selectedVideo.source_url || "");
                               if (!id) return;
-                              const url = `https://www.youtube.com/watch?v=${id}&t=${Math.max(0, m.start_sec)}s`;
+                              const url = `https://www.youtube.com/watch?v=${id}&t=${Math.max(
+                                0,
+                                m.start_sec
+                              )}s`;
                               window.open(url, "_blank", "noopener,noreferrer");
                             }}
                           >
@@ -1016,7 +1055,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* RIGHT */}
           <div style={styles.right}>
             <div style={styles.card}>
               <div style={styles.cardTitleRow}>
@@ -1034,8 +1072,7 @@ export default function Dashboard() {
                 <div style={styles.historyList}>
                   {videos.map((v) => {
                     const thumb =
-                      v.thumbnail_url ||
-                      (v.source_url ? getThumbFromUrl(v.source_url) : null);
+                      v.thumbnail_url || (v.source_url ? getThumbFromUrl(v.source_url) : null);
 
                     const active = selectedVideo?.id === v.id;
 
@@ -1076,9 +1113,7 @@ export default function Dashboard() {
 
                         <div style={styles.historyRight}>
                           <div style={styles.statusPill}>{(v.status || "pending").toLowerCase()}</div>
-                          {v.source_url ? (
-                            <span style={styles.openLink}>abrir</span>
-                          ) : null}
+                          {v.source_url ? <span style={styles.openLink}>abrir</span> : null}
                         </div>
                       </button>
                     );
@@ -1087,7 +1122,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Selected video preview */}
             {selectedVideo ? (
               <div style={{ ...styles.card, marginTop: 12 }}>
                 <div style={styles.cardTitle}>Selecionado</div>
@@ -1098,7 +1132,9 @@ export default function Dashboard() {
                     <div style={styles.selectedThumbFallback} />
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={styles.selectedTitle}>{selectedVideo.title || "YouTube video"}</div>
+                    <div style={styles.selectedTitle}>
+                      {selectedVideo.title || "YouTube video"}
+                    </div>
                     <div style={styles.selectedMeta}>
                       Status: <b>{selectedVideo.status || "—"}</b> • Duração:{" "}
                       <b>{selectedDuration ? fmtTime(selectedDuration) : "—"}</b>
@@ -1106,7 +1142,9 @@ export default function Dashboard() {
                     {selectedVideo.source_url ? (
                       <button
                         style={{ ...styles.btnGhostSm, marginTop: 10 }}
-                        onClick={() => window.open(selectedVideo.source_url!, "_blank", "noopener,noreferrer")}
+                        onClick={() =>
+                          window.open(selectedVideo.source_url!, "_blank", "noopener,noreferrer")
+                        }
                       >
                         Abrir no YouTube
                       </button>
@@ -1307,7 +1345,6 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.4,
   },
 
-  // Opus panel
   opusPanel: {
     marginTop: 10,
     borderRadius: 14,
@@ -1382,8 +1419,15 @@ const styles: Record<string, React.CSSProperties> = {
   rangeTime: { fontWeight: 900, marginTop: 4 },
   range: { width: "100%", marginTop: 10 },
 
-  // history
-  historyList: { display: "flex", flexDirection: "column", gap: 10, marginTop: 10, maxHeight: "70vh", overflow: "auto", paddingRight: 6 },
+  historyList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    marginTop: 10,
+    maxHeight: "70vh",
+    overflow: "auto",
+    paddingRight: 6,
+  },
   historyItem: {
     display: "flex",
     gap: 10,
@@ -1395,8 +1439,20 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     textAlign: "left",
   },
-  historyThumb: { width: 56, height: 36, borderRadius: 10, objectFit: "cover", border: "1px solid rgba(255,255,255,.10)" },
-  thumbFallback: { width: 56, height: 36, borderRadius: 10, background: "rgba(255,255,255,.06)", border: "1px dashed rgba(255,255,255,.12)" },
+  historyThumb: {
+    width: 56,
+    height: 36,
+    borderRadius: 10,
+    objectFit: "cover",
+    border: "1px solid rgba(255,255,255,.10)",
+  },
+  thumbFallback: {
+    width: 56,
+    height: 36,
+    borderRadius: 10,
+    background: "rgba(255,255,255,.06)",
+    border: "1px dashed rgba(255,255,255,.12)",
+  },
   historyTitle: {
     fontWeight: 900,
     fontSize: 13,
@@ -1418,14 +1474,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   openLink: { fontSize: 12, color: "rgba(120,160,255,.95)", fontWeight: 900 },
 
-  // selected
   selectedRow: { display: "flex", gap: 12, alignItems: "center", marginTop: 10 },
   selectedThumb: { width: 110, height: 62, borderRadius: 12, objectFit: "cover", border: "1px solid rgba(255,255,255,.10)" },
   selectedThumbFallback: { width: 110, height: 62, borderRadius: 12, background: "rgba(255,255,255,.06)", border: "1px dashed rgba(255,255,255,.12)" },
   selectedTitle: { fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
   selectedMeta: { marginTop: 6, color: "rgba(255,255,255,.62)", fontSize: 12 },
 
-  // moments
   momentsList: { display: "flex", flexDirection: "column", gap: 12, marginTop: 6 },
   momentCard: {
     borderRadius: 14,
