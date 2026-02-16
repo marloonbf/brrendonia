@@ -88,7 +88,7 @@ module.exports = async (req, res) => {
 
     const { data: profile, error: pErr } = await supabaseAdmin
       .from("profiles")
-      .select("id,email,plan,videos_analyzed")
+      .select("id,email,plan,credits")
       .eq("email", email)
       .maybeSingle();
 
@@ -103,7 +103,7 @@ module.exports = async (req, res) => {
     const activatePro = shouldActivatePro(payment);
 
     const updatePayload = {};
-    if (addCredits > 0) updatePayload.videos_analyzed = Number(profile.videos_analyzed || 0) + addCredits;
+    if (addCredits > 0) updatePayload.credits = Number(profile.credits || 0) + addCredits;
     if (activatePro) {
       updatePayload.plan = "pro";
       updatePayload.subscription_status = "active";
