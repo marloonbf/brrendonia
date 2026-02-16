@@ -7,8 +7,5 @@
     "postinstall": "npm --prefix client install",
     "build": "npm --prefix client run build",
     "dev": "npm --prefix client run dev"
-  },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.95.3"
   }
 }
