@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { apiFetch } from "../lib/api";
 import { useNavigate } from "react-router-dom";
 
 type BalanceResponse = {
@@ -120,9 +121,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   /**
-   * ✅ PRODUÇÃO (VERCEL):
-   * Sempre chame a API serverless pela mesma origem (HTTPS) usando /api.
-   * Assim você nunca cai em "Mixed Content" e nem depende de VITE_API_BASE.
+   * ✅ Sempre chame a API serverless pela mesma origem (HTTPS) usando /api.
    */
   const API_BASE = "";
   const API_PREFIX = "/api";
@@ -185,7 +184,6 @@ export default function Dashboard() {
       headers["Content-Type"] = "application/json";
     }
 
-    // chama: {API_BASE}{API_PREFIX}{path}
     const url = `${API_BASE}${API_PREFIX}${path}`;
     const res = await fetch(url, { ...init, headers });
     return res;
@@ -434,7 +432,7 @@ export default function Dashboard() {
       setPayLoading(true);
       setMsg("");
 
-      const res = await fetchAuthed(`/payments/create`, {
+      const json: any = await apiFetch("/api/payments/create", {
         method: "POST",
         body: JSON.stringify({
           pack_id: "p150",
@@ -442,25 +440,13 @@ export default function Dashboard() {
         }),
       });
 
-      // sempre tentar ler body (ajuda a debugar erro)
-      const raw = await res.text();
-      let json: PaymentCreateResponse | any = null;
-      try {
-        json = raw ? JSON.parse(raw) : null;
-      } catch {
-        json = { ok: false, error: raw };
-      }
+      if (!json?.ok) throw new Error(json?.error || "PAY_CREATE_ERROR");
 
-      if (!res.ok || !json?.ok) {
-        throw new Error(json?.error || `PAY_CREATE_ERROR (HTTP ${res.status})`);
-      }
-
-      const link = json.payment_url || json.checkout_url || json.url || json.init_point;
+      const link =
+        json.payment_url || json.checkout_url || json.url || json.init_point;
       if (!link) throw new Error("PAY_CREATE_NO_URL");
 
-      // melhor que window.open (evita bloqueio de popup)
       window.location.href = link;
-      setMsg("➡️ Redirecionando para o checkout...");
     } catch (e: any) {
       setMsg(`❌ Erro ao criar pagamento: ${e?.message || e}`);
     } finally {
@@ -492,6 +478,9 @@ export default function Dashboard() {
               <span style={s.badge}>Workflow</span>
             </div>
             <div style={s.mutedSmall}>Logado como: {email}</div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+              build: 2026-02-21-13h20
+            </div>
           </div>
         </div>
 
@@ -654,7 +643,6 @@ export default function Dashboard() {
                       }}
                       onClick={() => {
                         setCategories((prev) => {
-                          // toggle
                           if (prev.includes(c.id)) return prev.filter((x) => x !== c.id);
                           return [...prev.filter((x) => x !== "auto"), c.id];
                         });
