@@ -1,152 +1,153 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
+import { apiFetch } from "../lib/api";
+
+type BalanceResponse = {
+  ok: boolean;
+  credits?: number;
+  profile?: { credits?: number };
+  error?: string;
+};
+
+type PaymentCreateResponse = {
+  ok: boolean;
+  error?: string;
+  checkout_url?: string;
+  payment_url?: string;
+  url?: string;
+  init_point?: string;
+};
 
 export default function Dashboard() {
-  const navigate = useNavigate();
+  const [credits, setCredits] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [payLoading, setPayLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const [youtubeUrl, setYoutubeUrl] = useState("");
-  const [duration, setDuration] = useState("");
+  async function loadBalance() {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiFetch<BalanceResponse>("/api/credits/balance", {
+        method: "GET",
+      });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+      const c =
+        typeof data.credits === "number"
+          ? data.credits
+          : typeof data.profile?.credits === "number"
+            ? data.profile.credits
+            : 0;
 
-    if (!youtubeUrl) {
-      alert("Cole um link do YouTube");
-      return;
+      setCredits(c);
+    } catch (e: any) {
+      setError(e?.message || "Erro ao carregar créditos");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    if (!duration) {
-      alert("Selecione a duração");
-      return;
+  async function handleAddCredits() {
+    setPayLoading(true);
+    setError(null);
+
+    try {
+      const data = await apiFetch<PaymentCreateResponse>("/api/payments/create", {
+        method: "POST",
+        body: { pack_id: "p150" },
+      });
+
+      const checkout =
+        data.checkout_url || data.payment_url || data.url || data.init_point;
+
+      if (!checkout) {
+        throw new Error("Não recebi checkout_url do servidor.");
+      }
+
+      // redireciona pro checkout
+      window.location.href = checkout;
+    } catch (e: any) {
+      setError(e?.message || "Erro ao criar pagamento");
+    } finally {
+      setPayLoading(false);
     }
+  }
 
-    alert("Aqui vamos integrar com a API depois 🚀");
-  };
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    window.location.href = "/";
+  }
+
+  useEffect(() => {
+    loadBalance();
+  }, []);
 
   return (
-    <div style={styles.page}>
-      <div style={styles.container}>
-        <h1 style={styles.title}>Analisar Vídeo</h1>
-        <p style={styles.subtitle}>
-          Descubra os melhores momentos do seu vídeo em segundos
-        </p>
+    <div style={{ padding: 32 }}>
+      <h1 style={{ fontSize: 44, marginBottom: 20 }}>Dashboard</h1>
 
-        <div style={styles.card}>
-          <form onSubmit={handleSubmit}>
-            <label style={styles.label}>Link do YouTube</label>
-            <input
-              type="url"
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={youtubeUrl}
-              onChange={(e) => setYoutubeUrl(e.target.value)}
-              style={styles.input}
-            />
-
-            <label style={styles.label}>Duração dos momentos</label>
-            <select
-              value={duration}
-              onChange={(e) => setDuration(e.target.value)}
-              style={styles.select}
-            >
-              <option value="">Selecione...</option>
-              <option value="under-30">&lt;30s</option>
-              <option value="30-59">30s–59s</option>
-              <option value="60-89">60s–89s</option>
-              <option value="90-180">90s–3m</option>
-              <option value="180-300">3m–5m</option>
-              <option value="300-600">5m–10m</option>
-              <option value="600-900">10m–15m</option>
-            </select>
-
-            <button type="submit" style={styles.button}>
-              ✨ Analisar Vídeo
-            </button>
-          </form>
+      <div
+        style={{
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 10,
+          padding: 18,
+          width: 340,
+          background: "rgba(0,0,0,0.10)",
+        }}
+      >
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>
+          Créditos disponíveis
         </div>
 
-        <div style={styles.infoCard}>
-          <h3>O que você vai receber?</h3>
+        {loading ? (
+          <div>Carregando...</div>
+        ) : (
+          <div style={{ fontSize: 20 }}>{credits}</div>
+        )}
 
-          <ul style={styles.list}>
-            <li>🔥 TOP 3 ou TOP 10 momentos</li>
-            <li>⏱️ Timestamps exatos</li>
-            <li>📝 Transcrição completa</li>
-          </ul>
+        <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+          <button
+            onClick={handleAddCredits}
+            disabled={payLoading}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.25)",
+              cursor: payLoading ? "not-allowed" : "pointer",
+            }}
+          >
+            {payLoading ? "Abrindo..." : "Adicionar créditos"}
+          </button>
+
+          <button
+            onClick={loadBalance}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.25)",
+              cursor: "pointer",
+            }}
+          >
+            Atualizar
+          </button>
+
+          <button
+            onClick={handleLogout}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.25)",
+              cursor: "pointer",
+            }}
+          >
+            Sair
+          </button>
         </div>
+
+        {error && (
+          <div style={{ marginTop: 12, color: "#ff6b6b" }}>{error}</div>
+        )}
       </div>
     </div>
   );
 }
-
-const styles: any = {
-  page: {
-    minHeight: "100vh",
-    background: "linear-gradient(135deg, #0f172a, #1e293b)",
-    padding: "60px 20px",
-    color: "white",
-  },
-  container: {
-    maxWidth: "700px",
-    margin: "0 auto",
-  },
-  title: {
-    fontSize: "32px",
-    fontWeight: "bold",
-    marginBottom: "8px",
-  },
-  subtitle: {
-    color: "#94a3b8",
-    marginBottom: "40px",
-  },
-  card: {
-    background: "rgba(255,255,255,0.05)",
-    padding: "30px",
-    borderRadius: "12px",
-    backdropFilter: "blur(10px)",
-    marginBottom: "30px",
-  },
-  label: {
-    display: "block",
-    marginBottom: "8px",
-    marginTop: "20px",
-    fontSize: "14px",
-    color: "#cbd5e1",
-  },
-  input: {
-    width: "100%",
-    padding: "12px",
-    borderRadius: "8px",
-    border: "1px solid #334155",
-    background: "#0f172a",
-    color: "white",
-  },
-  select: {
-    width: "100%",
-    padding: "12px",
-    borderRadius: "8px",
-    border: "1px solid #334155",
-    background: "#0f172a",
-    color: "white",
-  },
-  button: {
-    marginTop: "30px",
-    width: "100%",
-    padding: "14px",
-    borderRadius: "8px",
-    border: "none",
-    background: "linear-gradient(90deg,#6366f1,#8b5cf6)",
-    color: "white",
-    fontWeight: "bold",
-    cursor: "pointer",
-  },
-  infoCard: {
-    background: "rgba(255,255,255,0.05)",
-    padding: "20px",
-    borderRadius: "12px",
-  },
-  list: {
-    marginTop: "15px",
-    lineHeight: "1.8",
-    color: "#cbd5e1",
-  },
-};
