@@ -1,7 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import { apiFetch } from "../lib/api";
 
 type BalanceResponse = {
   ok: boolean;
@@ -10,172 +9,155 @@ type BalanceResponse = {
   error?: string;
 };
 
-type PaymentCreateResponse = {
-  ok: boolean;
-  error?: string;
-  payment_url?: string;
-  checkout_url?: string;
-  url?: string;
-  init_point?: string;
-};
-
 export default function Dashboard() {
   const navigate = useNavigate();
 
   const [credits, setCredits] = useState<number>(0);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [busy, setBusy] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>("");
 
-  const loadBalance = async () => {
-    setError("");
+  const loadBalance = useCallback(async () => {
     setLoading(true);
-    try {
-      const res = (await apiFetch("/api/balance")) as BalanceResponse;
+    setError("");
 
-      if (!res?.ok) {
-        throw new Error(res?.error || "Falha ao carregar créditos");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+
+      // Se não estiver logado, manda pro login
+      if (!accessToken) {
+        navigate("/login");
+        return;
       }
 
-      const c =
-        typeof res.credits === "number"
-          ? res.credits
-          : typeof res.profile?.credits === "number"
-          ? res.profile.credits
-          : 0;
+      // Ajuste a rota se sua API for diferente:
+      // exemplo: "/api/credits/balance" ou "/api/balance"
+      const res = await fetch("/api/balance", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
 
-      setCredits(c);
-    } catch (e: any) {
-      setError(e?.message || "Erro ao carregar dados");
+      const data = (await res.json()) as BalanceResponse;
+
+      if (!res.ok || !data.ok) {
+        setError(data.error || "Não foi possível carregar seus créditos.");
+        return;
+      }
+
+      const c = data.credits ?? data.profile?.credits ?? 0;
+      setCredits(typeof c === "number" ? c : 0);
+    } catch (e) {
+      setError("Erro ao carregar créditos. Tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    loadBalance();
+  }, [loadBalance]);
+
+  const handleLogout = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      await supabase.auth.signOut();
+      navigate("/login");
+    } catch {
+      setError("Não foi possível sair. Tente novamente.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLogout = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await supabase.auth.signOut();
-      navigate("/");
-    } catch (e: any) {
-      setError(e?.message || "Erro ao sair");
-    } finally {
-      setBusy(false);
-    }
+  const handleAddCredits = () => {
+    // Se você tiver uma tela de pricing/checkout
+    navigate("/pricing");
   };
-
-  const handleBuyCredits = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const res = (await apiFetch("/api/payments/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pack: "credits_150" }), // ajuste conforme seu backend
-      })) as PaymentCreateResponse;
-
-      if (!res?.ok) {
-        throw new Error(res?.error || "Erro ao criar pagamento");
-      }
-
-      const url = res.payment_url || res.checkout_url || res.url || res.init_point;
-      if (!url) throw new Error("Checkout não retornou URL");
-
-      window.location.href = url;
-    } catch (e: any) {
-      setError(e?.message || "Erro ao iniciar pagamento");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    loadBalance();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
-    <div style={s.page}>
-      <div style={s.wrap}>
-        <h1 style={s.h1}>Dashboard</h1>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#0f1115",
+        color: "white",
+        padding: 32,
+      }}
+    >
+      <h1 style={{ fontSize: 42, margin: "0 0 20px 0" }}>Dashboard</h1>
 
-        <div style={s.card}>
-          <div style={s.cardTitle}>Créditos disponíveis</div>
-          <div style={s.credits}>{loading ? "Carregando..." : credits}</div>
-
-          <div style={s.actions}>
-            <button
-              onClick={handleBuyCredits}
-              style={{ ...s.btn, ...(busy ? s.btnDisabled : {}) }}
-              disabled={busy}
-              title="Abrir checkout"
-            >
-              Adicionar créditos
-            </button>
-
-            <button
-              onClick={loadBalance}
-              style={{ ...s.btn, ...(busy ? s.btnDisabled : {}) }}
-              disabled={busy}
-              title="Atualizar saldo"
-            >
-              Atualizar
-            </button>
-
-            <button
-              onClick={handleLogout}
-              style={{ ...s.btn, ...(busy ? s.btnDisabled : {}) }}
-              disabled={busy}
-              title="Sair da conta"
-            >
-              Sair
-            </button>
-          </div>
-
-          {!!error && <div style={s.error}>{error}</div>}
+      <div
+        style={{
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 12,
+          padding: 18,
+          width: 360,
+          background: "rgba(255,255,255,0.04)",
+        }}
+      >
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>
+          Créditos disponíveis
         </div>
+
+        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 14 }}>
+          {loading ? "Carregando..." : credits}
+        </div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={handleAddCredits}
+            disabled={loading}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.25)",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+              background: "rgba(255,255,255,0.06)",
+              color: "white",
+            }}
+          >
+            Adicionar créditos
+          </button>
+
+          <button
+            onClick={loadBalance}
+            disabled={loading}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.25)",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+              background: "rgba(255,255,255,0.06)",
+              color: "white",
+            }}
+          >
+            Atualizar
+          </button>
+
+          <button
+            onClick={handleLogout}
+            disabled={loading}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.25)",
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
+              background: "rgba(255,255,255,0.06)",
+              color: "white",
+            }}
+          >
+            Sair
+          </button>
+        </div>
+
+        {error && (
+          <div style={{ marginTop: 12, color: "#ff6b6b" }}>{error}</div>
+        )}
       </div>
     </div>
   );
 }
-
-const s: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: "100vh",
-    background: "#0b0f17",
-    color: "rgba(255,255,255,.92)",
-    padding: 32,
-  },
-  wrap: { maxWidth: 980, margin: "0 auto" },
-  h1: { fontSize: 42, margin: "20px 0 18px 0" },
-
-  card: {
-    width: 340,
-    padding: 16,
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,.15)",
-    background: "rgba(255,255,255,.04)",
-    boxShadow: "0 10px 30px rgba(0,0,0,.35)",
-  },
-  cardTitle: { fontSize: 14, opacity: 0.85, marginBottom: 10 },
-  credits: { fontSize: 28, fontWeight: 700, marginBottom: 14 },
-
-  actions: { display: "flex", gap: 10, flexWrap: "wrap" },
-
-  btn: {
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid rgba(255,255,255,.18)",
-    background: "rgba(255,255,255,.06)",
-    color: "rgba(255,255,255,.92)",
-    cursor: "pointer",
-    fontWeight: 600,
-  },
-  btnDisabled: {
-    opacity: 0.6,
-    cursor: "not-allowed",
-  },
-
-  error: { marginTop: 12, color: "#ff6b6b", fontSize: 13 },
-};
